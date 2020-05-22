@@ -29,7 +29,7 @@ func main()  {
 
 	b := 1
 	pointer2 := &b
-	pointer2++
+	//pointer2++
 	fmt.Println(pointer2)
 }
 
