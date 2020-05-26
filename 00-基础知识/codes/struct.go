@@ -89,15 +89,91 @@ func main() {
 		state: "XiHu",
 	}
 	fmt.Printf("city: %s, state: %s\n", onePerson.city, onePerson.state)
+
+	familyData := &FamilyMember{
+		name: "xjx",
+		family: Family{
+			fname: "xushijz",
+			num:   5,
+		},
+		address: struct{ city, state string }{city: "Hangzhou", state: "Xihu"},
+		child: &FamilyMember{
+			name: "xzh",
+			family: Family{
+				fname: "xushijz",
+				num:   5,
+			},
+			address: struct{ city, state string }{city: "Hangzhou", state: "Xihu"},
+			child:   &FamilyMember{},
+		},
+	}
+	fmt.Println(familyData) //&{xjx {xushijz 5} {Hangzhou Xihu} 0xc000086050}
+
+	property := new(Property)
+	fmt.Println(property.value) // 0
+	property.SetValue(2)
+	fmt.Println(property.value) // 2
+	fmt.Println(property.GetValue()) //2
+
+	myAddress := Address{
+		city: "HangZhou",
+		state: "XiHu Area",
+	}
+	myAddress.ChangeAddress("QuZhou", "QuJiang")
+	fmt.Printf("city:" + myAddress.city + " state:" + myAddress.state + "\n")
+
+}
+
+
+
+
+
+
+
+
+//定义属性结构体
+type Property struct {
+	value int
+}
+
+//设置属性值
+func (p *Property) SetValue(v int) {
+	p.value = v //修改成员变量值
+}
+
+//获取属性值
+func (p *Property) GetValue() int {
+	return p.value
+}
+
+/** 家族信息结构 */
+type Family struct {
+	fname string //家族名称
+	num   int    //家族人数
+}
+
+/** 家族成员结构体 */
+type FamilyMember struct {
+	name    string
+	family  Family
+	address struct {
+		city, state string
+	}
+	child *FamilyMember
 }
 
 type Address struct {
 	city, state string
 }
 
+func (a Address) ChangeAddress(city, state string){
+	a.city = city
+	a.state = state
+}
+
 type Person struct {
-	name      string
-	Age       int
+	name string
+	Age  int
 	Address
 }
 
