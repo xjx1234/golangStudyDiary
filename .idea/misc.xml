@@ -4,6 +4,7 @@
     <option name="languageLevel" value="ES6" />
   </component>
   <component name="ProjectPlainTextFileTypeManager">
+    <file url="file://$PROJECT_DIR$/00-基础知识/codes/interface.go" />
     <file url="file://$PROJECT_DIR$/00-基础知识/codes/struct.go" />
   </component>
 </project>
