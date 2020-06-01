@@ -48,9 +48,7 @@ func main() {
 	s1, s2 := <-squaresChan, <-cubesChan
 	fmt.Printf("the sum is %d\n", s1+s2)
 
-	commChan := make(chan int)
-	sendOnlyChan := make(chan<- int)
-	sendOnlyChan = commChan
+	//sendOnlyChan := make(chan<- int)
 	//recOnlyChan := make(<-chan int)
 	//sendOnlyChan <- 1
 	//<-recOnlyChan
