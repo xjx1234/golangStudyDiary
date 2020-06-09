@@ -85,8 +85,47 @@ func main() {
 	fmt.Println("FieldByName(\"bool\").Type", valueOfRt.FieldByName("bool").Type()) //查询 字段名为 bool的成员对象信息
 	fmt.Println("FieldByIndex([]int{6, 0}).Type()", valueOfRt.FieldByIndex([]int{6, 0}).Type()) // 多层访问，查询第6个结构体的第一个成员Type
 
-	//var num int = 100
-	//valueOfNum := reflect.ValueOf(num)
-	//fmt.Println(valueOfNum.Elem())
+	var y int = 2
+	valueOfY := reflect.ValueOf(&y)
+	valueOfY = valueOfY.Elem()
+	if valueOfY.CanAddr(){
+		fmt.Println("y 可以被修改")
+		valueOfY.SetInt(3)
+		fmt.Printf("y 值为:%v \n", valueOfY.Int())
+	}else{
+		fmt.Println("y 不能被修改")
+	}
 
+	//定义结构体
+	type human struct {
+		name string
+		Age int
+	}
+	valueOfHuman := reflect.ValueOf(&human{"xjx", 24})
+	valueOfHuman = valueOfHuman.Elem()
+	valueAge := valueOfHuman.FieldByName("Age")
+	valueAge.SetInt(26)
+	fmt.Println(valueAge.Int())
+
+	var b int
+	// 取变量a的反射类型对象
+	typeOfB := reflect.TypeOf(b)
+	// 根据反射类型对象创建类型实例
+	aIns := reflect.New(typeOfB)
+	// 输出Value的类型和种类
+	fmt.Println(aIns.Type(), aIns.Kind())
+
+
+	funcValue := reflect.ValueOf(addNum)
+	// 构造函数参数, 传入两个整型值
+	paramList := []reflect.Value{reflect.ValueOf(10), reflect.ValueOf(20)}
+	// 反射调用函数
+	retList := funcValue.Call(paramList)
+	// 获取第一个返回值, 取整数值
+	fmt.Println(retList[0].Int())
+
+}
+
+func addNum(a, b int) int {
+	return a + b
 }
