@@ -370,5 +370,291 @@ go mod edit -replace=golang.org/x/crypto@v0.0.0=github.com/golang/crypto@latest
 
 ### Context
 
+#### Context初识
+
+在go的1.7之前，context还是非编制的(包golang.org/x/net/context中)，golang团队发现context这个东西还挺好用的，很多地方也都用到了，就把它收编了，**1.7版本正式进入标准库**。随着 Context 包的引入，标准库中很多接口因此加上了 Context 参数，例如 database/sql 包，Context 几乎成为了并发控制和超时控制的标准做法。
+
+context常用的使用姿势：
+
+1. 一个请求对应多个goroutine之间的数据交互
+2. 超时控制
+3. 上下文控制
+
+Context 包的核心就是 Context 接口，其定义如下：
+
+```go
+type Context interface {
+    Deadline() (deadline time.Time, ok bool)
+    Done() <-chan struct{}
+    Err() error
+    Value(key interface{}) interface{}
+}
+```
+
+这个就是Context的底层数据结构，来分析下：
+
+|   字段   |                             说明                             |
+| :------: | :----------------------------------------------------------: |
+| Deadline | 返回一个time.Time，表示当前Context应该结束的时间，ok则表示有结束时间 |
+|   Done   | 当Context被取消或者超时时候返回的一个close的channel，告诉给context相关的函数要停止当前工作然后返回了。(这个有点像全局广播) |
+|   Err    | Err 方法会返回当前 Context 结束的原因，它只会在 Done 返回的 Channel 被关闭时才会返回非空的值 |
+|  Value   | Value 方法会从 Context 中返回键对应的值，对于同一个上下文来说，多次调用 Value 并传入相同的 Key 会返回相同的结果，该方法仅用于传递跨 API 和进程间跟请求域的数据。 |
+
+Go语言内置两个函数：Background() 和 TODO()，这两个函数分别返回一个实现了 Context 接口的 background 和 todo。
+
+Background() 主要用于 main 函数、初始化以及测试代码中，作为 Context 这个树结构的最顶层的 Context，也就是根 Context。
+
+TODO()，它目前还不知道具体的使用场景，在不知道该使用什么 Context 的时候，可以使用这个。
+
+background 和 todo 本质上都是 emptyCtx 结构体类型，是一个不可取消，没有设置截止时间，没有携带任何值的 Context。
+
+另外Go语言还带了4个Context实现，分别是:   
+
+- emptyCtx  完全空的Context，实现的函数也都是返回nil，仅仅只是实现了Context的接口
+- cancelCtx  继承自Context，同时也实现了canceler接口
+- timerCtx 继承自cancelCtx，增加了timeout机制
+- valueCtx   存储键值对的数据
+
+为了更方便的创建Context，包里头定义了Background来作为所有Context的根，它是一个emptyCtx的实例。
+
+```go
+var (
+    background = new(emptyCtx)
+    todo       = new(emptyCtx) // 
+)
+func Background() Context {
+    return background
+}
+```
+
+你可以认为所有的Context是树的结构，Background是树的根，当任一Context被取消的时候，那么继承它的Context 都将被回收。
+
+#### Context实战应用
+
+- **WithCancel**
+
+  WithCancel 的函数源码：
+
+  ```go
+  func WithCancel(parent Context) (ctx Context, cancel CancelFunc) {
+  	c := newCancelCtx(parent)
+  	propagateCancel(parent, &c)
+  	return &c, func() { c.cancel(true, Canceled) }
+  }
+  ```
+
+  下面我们用一个示例，来理解此方法的使用，我们设计一个程序，在10以内的数字内产生随机数，当随机数累加超过等于20的时候，停止程序运行，代码如下：
+
+  ```go
+  package main
+  
+  import (
+  	"context"
+  	"fmt"
+  	"math/rand"
+  	"time"
+  )
+  
+  func cancelFun(ctx context.Context) <-chan int {
+  	c := make(chan int)
+  	num := 0
+  	t := 0
+  	go func() {
+  		for {
+  			select {
+  			case <-ctx.Done():
+  				fmt.Printf("耗时 %d 秒， 随机数 %d \n", t, num)
+  				return
+  			case c <- num:
+  				incr := rand.Intn(10)
+  				num += incr
+  				if num >= 20 {
+  					num = 20
+  				}
+  				t++
+  				fmt.Printf("随机数 %d \n", num)
+  			}
+  		}
+  	}()
+  	return c
+  }
+  
+  func main(){
+      ctx, cancel := context.WithCancel(context.Background())
+  	randData := cancelFun(ctx)
+  	for n := range randData {
+  		if n >= 20 {
+  			cancel()
+  			break
+  		}
+  	}
+  	fmt.Println("running ... ")
+  	time.Sleep(time.Second)
+  }
+  ```
+
+  输出：
+
+  ```
+  $ go run context.go
+  随机数 1
+  随机数 8
+  随机数 15
+  随机数 20
+  随机数 20
+  running ...
+  耗时 5 秒， 随机数 20
+  ```
+
+- ### WithDeadline & WithTimeout
+
+  WithDeadline与WithTimeout实现的源码:
+
+  ```go
+  func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
+  	if cur, ok := parent.Deadline(); ok && cur.Before(d) {
+  		// The current deadline is already sooner than the new one.
+  		return WithCancel(parent)
+  	}
+  	c := &timerCtx{
+  		cancelCtx: newCancelCtx(parent),
+  		deadline:  d,
+  	}
+  	propagateCancel(parent, c)
+  	dur := time.Until(d)
+  	if dur <= 0 {
+  		c.cancel(true, DeadlineExceeded) // deadline has already passed
+  		return c, func() { c.cancel(true, Canceled) }
+  	}
+  	c.mu.Lock()
+  	defer c.mu.Unlock()
+  	if c.err == nil {
+  		c.timer = time.AfterFunc(dur, func() {
+  			c.cancel(true, DeadlineExceeded)
+  		})
+  	}
+  	return c, func() { c.cancel(true, Canceled) }
+  }
+  
+  func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc) {
+  	return WithDeadline(parent, time.Now().Add(timeout))
+  }
+  ```
+
+  下面我们用一个示例，来理解此方法的使用，我们设计一个程序，在100以内的数字内产生随机数，当累计时间超过10秒后，停止程序运行，代码如下：
+
+  ```go
+  package main
+  
+  import (
+  	"context"
+  	"fmt"
+  	"math/rand"
+  	"time"
+  )
+  
+  func timeOutFun(ctx context.Context) {
+  	n := 0
+  	for {
+  		select {
+  		case <-ctx.Done():
+  			fmt.Println("timeOut")
+  			return
+  		default:
+  			incr := rand.Intn(100)
+  			n += incr
+  			fmt.Printf("随机数 %d \n", n)
+  		}
+  		time.Sleep(time.Second)
+  	}
+  }
+  
+  func main(){
+  	//ctx, f := context.WithDeadline(context.Background(), time.Now().Add(10))
+  	ctx, f := context.WithTimeout(context.Background(), 10*time.Second)
+  	timeOutFun(ctx)
+  	defer f()
+  }
+  ```
+
+  程序输出:
+
+  ```go
+  $ go run context.go
+  随机数 81
+  随机数 168
+  随机数 215
+  随机数 274
+  随机数 355
+  随机数 373
+  随机数 398
+  随机数 438
+  随机数 494
+  随机数 494
+  timeOut
+  ```
+
+- ### WithValue
+
+  WithValue的实现源码:
+
+  ```go
+  func WithValue(parent Context, key, val interface{}) Context {
+  	if key == nil {
+  		panic("nil key")
+  	}
+  	if !reflect.TypeOf(key).Comparable() {
+  		panic("key is not comparable")
+  	}
+  	return &valueCtx{parent, key, val}
+  }
+  ```
+
+  下面我们用一个示例，来理解此方法的使用，我们设计一个程序，将键值为 xjx 和 id 的值带入 context中，并在函数中取出，代码如下：
+
+  ```go
+  package main
+  
+  import (
+  	"context"
+  	"fmt"
+  	"math/rand"
+  	"time"
+  )
+  
+  func valueFun(ctx context.Context) {
+  	id, ok := ctx.Value("id").(int)
+  	if !ok {
+  		fmt.Println("id value get fail")
+  	}
+  	xjxData := ctx.Value("xjx")
+  	fmt.Printf("id: %d \n", id)
+  	fmt.Printf("xjx: %s \n", xjxData)
+  
+  }
+  
+  func main(){
+  	ctx := context.WithValue(context.Background(), "xjx", "hello")
+  	ctx = context.WithValue(ctx, "id", 1)
+  	valueFun(ctx)
+  }
+  ```
+
+  代码输出:
+
+  ```go
+  $ go run context.go
+  id: 1
+  xjx: hello
+  ```
+
+  使用 Context 的注意事项：
+
+  - 不要把 Context 放在结构体中，要以参数的方式显示传递；
+  - 以 Context 作为参数的函数方法，应该把 Context 作为第一个参数；
+  - 给一个函数方法传递 Context 的时候，不要传递 nil，如果不知道传递什么，就使用 context.TODO；
+  - Context 的 Value 相关方法应该传递请求域的必要数据，不应该用于传递可选参数；
+  - Context 是线程安全的，可以放心的在多个 Goroutine 中传递。
+
 ### 常见包用法简述
 
