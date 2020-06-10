@@ -370,7 +370,34 @@ go mod edit -replace=golang.org/x/crypto@v0.0.0=github.com/golang/crypto@latest
 
 ### 包的加载
 
+Go 语言为以上问题提供了一个非常方便的特性：init() 函数。
 
+init() 函数的特性如下：
+
+- 每个源码可以使用 1 个 init() 函数。
+- init() 函数会在程序执行前（main() 函数执行前）被自动调用。
+- 调用顺序为 main() 中引用的包，以深度优先顺序初始化。
+
+例如，假设有这样的包引用关系：main→A→B→C，那么这些包的 init() 函数调用顺序为：
+
+> C.init→B.init→A.init→main
+
+说明：
+
+- 同一个包中的多个 init() 函数的调用顺序不可预期。
+- init() 函数不能被其他函数调用。
+
+Go 程序的启动和加载过程，在执行 main 包的 mian 函数之前， Go 引导程序会先对整个程序的包进行初始化。整个执行的流程如下图所示：
+
+![](https://myvoice1.oss-cn-beijing.aliyuncs.com/github/package_load.gif)
+
+
+
+Go语言包的初始化有如下特点：
+
+- 包初始化程序从 main 函数引用的包开始，逐级查找包的引用，直到找到没有引用其他包的包，最终生成一个包引用的有向无环图。
+- Go 编译器会将有向无环图转换为一棵树，然后从树的叶子节点开始逐层向上对包进行初始化。
+- 单个包的初始化过程如上图所示，先初始化常量，然后是全局变量，最后执行包的 init 函数。
 
 ### Context
 
