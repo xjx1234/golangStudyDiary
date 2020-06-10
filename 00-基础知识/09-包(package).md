@@ -368,6 +368,10 @@ go mod edit -replace=golang.org/x/crypto@v0.0.0=github.com/golang/crypto@latest
 
 然后在执行一次 `go mod tidy -v` 即可。
 
+### 包的加载
+
+
+
 ### Context
 
 #### Context初识
@@ -658,3 +662,189 @@ func Background() Context {
 
 ### 常见包用法简述
 
+#### flag包
+
+在编写命令行程序（工具、server）时，我们有时需要对命令参数进行解析，各种编程语言一般都会提供解析命令行参数的方法或库，以方便程序员使用。在Go语言中的 flag 包中，提供了命令行参数解析的功能。下面我们就来看一下 flag 包可以做什么，它具有什么样的能力。
+
+这里介绍几个概念：
+
+- 命令行参数（或参数）：是指运行程序时提供的参数；
+- 已定义命令行参数：是指程序中通过 flag.Type 这种形式定义了的参数；
+- 非 flag（non-flag）命令行参数（或保留的命令行参数）：可以简单理解为 flag 包不能解析的参数。
+
+flag 包支持的命令行参数类型有 bool、int、int64、uint、uint64、float、float64、string、duration，如下表所示：
+
+|      参数      |                            有效值                            |
+| :------------: | :----------------------------------------------------------: |
+|  字符串 flag   |                          合法字符串                          |
+|   整数 flag    |           1234、0664、0x1234 等类型，也可以是负数            |
+|  浮点数 flag   |                          合法浮点数                          |
+| bool 类型 flag |   1、0、t、f、T、F、true、false、TRUE、FALSE、True、False    |
+|  时间段 flag   | 任何合法的时间段字符串，如“300ms”、“-1.5h”、“2h45m”，<br/>合法的单位有“ns”、“us”、“µs”、“ms”、“s”、“m”、“h” |
+
+下面来看下 flag包的基本使用:
+
+1.  flag.Type()
+
+   基本格式为:
+
+   > flag.Type(flag 名, 默认值, 帮助信息) *Type
+
+   示例:
+
+   ```go
+   	flag.Int("age", 11, "年龄")
+   	flag.String("name", "xjx", "姓名")
+   	flag.Bool("mrs", true, "婚否")
+   ```
+
+   需要注意的是，此时 name、age、mrs 均为对应类型的指针。
+
+2. flag.TypeVar()
+
+   基本格式为：
+
+   > flag.TypeVar(Type 指针, flag 名, 默认值, 帮助信息)
+
+   示例:
+
+   ```go
+   	var name string
+   	var age int
+   	var mrs bool
+   	flag.StringVar(&name, "name", "xjx", "姓名")
+   	flag.IntVar(&age, "age", 0, "年龄")
+   	flag.BoolVar(&mrs, "mrs", false, "婚否")
+   ```
+
+   
+
+3. flag.Parse
+
+   通过以上两种方法定义好命令行 flag 参数后，需要通过调用 flag.Parse() 来对命令行参数进行解析。
+
+   支持的命令行参数格式有以下几种：
+
+   - -flag=x；
+   - -flag x：只支持非 bool 类型。
+
+   其中，布尔类型的参数必须使用等号的方式指定。
+
+   flag 包的其他函数：
+
+   > flag.Args() //返回命令行参数后的其他参数，以 []string 类型
+
+   >flag.NArg() //返回命令行参数后的其他参数个数
+
+   > flag.NFlag() //返回使用的命令行参 数个数
+
+   
+
+   示例:
+
+   ```go
+   package main
+   
+   import (
+   	"flag"
+   	"fmt"
+   )
+   
+   var name = flag.String("name", "", "姓名")
+   var age = flag.Int("age", 0, "年龄")
+   var mrs bool
+   
+   func Init() {
+   	flag.BoolVar(&mrs, "mrs", false, "婚否")
+   }
+   
+   func main() {
+   	Init()
+   	flag.Parse()
+   	fmt.Printf("args=%s, num=%d\n", flag.Args(), flag.NArg())
+   	for i := 0; i != flag.NArg(); i++ {
+   		fmt.Printf("arg[%d]=%s\n", i, flag.Arg(i))
+   	}
+   	fmt.Println("name=", *name)
+   	fmt.Println("age=", *age)
+   	fmt.Println("mrs=", mrs)
+   }
+   ```
+
+   运行结果如下：
+
+   ```go
+   $ go run flag.go  -name="xjx1" -age=33 -mrs=false
+   args=[], num=0
+   name= xjx1
+   age= 33
+   mrs= false
+   ```
+
+   
+
+4. 自定义value
+
+   自定义是指自己定义一个类型用于flag类型的解析，基本格式为:
+
+   > flag.Var(&flagVal, "name", "help message for flagname")
+
+   
+
+   下面废话不多说直接看示例：
+
+   ```go
+   type sliceValue []string
+   
+   func newSliceValue(vals []string, p *[]string) *sliceValue{
+   	*p = vals
+   	return (*sliceValue)(p)
+   }
+   
+   /* 
+   
+   func Var(value Value, name string, usage string) {
+   	CommandLine.Var(value, name, usage)
+   }
+   
+   type Value interface {
+   	String() string
+   	Set(string) error
+   }
+   */
+   
+   // 因为flag.Var中第一个Value参数必须实现 String Set 函数
+   func (s *sliceValue) String() string{
+   	*s = sliceValue(strings.Split("default", ","))
+   	return "none of my business"
+   }
+   
+   // 因为flag.Var中第一个Value参数必须实现 String Set 函数
+   func (s *sliceValue) Set(val string) error{
+   	*s = sliceValue(strings.Split(val, ","))
+   	return nil
+   }
+   
+   func main() {
+   	var languages []string
+   	flag.Var(newSliceValue([]string{}, &languages), "slice", "i like")
+   	flag.Parse()
+   	fmt.Println(languages)
+   }
+   
+   ```
+
+    运行代码结果为:
+
+   ```go
+   $ go run flag.go  -slice go,java,php
+   [go java php]
+   ```
+
+#### time包
+
+#### os包
+
+#### regexp包
+
+#### big包
