@@ -460,3 +460,214 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
   
 
 ### HTTP Client
+
+前面我们已经简单的从源码以及示例角度演示了Http Server方面的操作，既然有了Server端操作，肯定也少不了Client端操作，下面我们看下一个最简单的Http Get请求， 代码如下:
+
+```go
+	response, err := http.Get("https://doc.btc.com/v1/poster/production/explorer-banner.json?t=1592798186869")
+	fmt.Println(response)
+	fmt.Println(err)
+```
+
+运行代码，输出接口返回值，看似简单的一段代码，却实现了一个http请求，下面我们从源码层面看看Go是如何处理这些方面的。
+
+```go
+func Get(url string) (resp *Response, err error) {
+	return DefaultClient.Get(url)
+}
+
+func (c *Client) Get(url string) (resp *Response, err error) {
+	req, err := NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.Do(req)
+}
+
+func (c *Client) Do(req *Request) (*Response, error) {
+	return c.do(req)
+}
+
+func (c *Client) do(req *Request) (retres *Response, reterr error) {
+    .......
+    req = &Request{
+        Method:   redirectMethod,
+        Response: resp,
+        URL:      u,
+        Header:   make(Header),
+        Host:     host,
+        Cancel:   ireq.Cancel,
+        ctx:      ireq.ctx,
+    }
+    ......
+    copyHeaders(req)
+    ......
+    reqs = append(reqs, req)
+    var err error
+    var didTimeout func() bool
+    if resp, didTimeout, err = c.send(req, deadline); err != nil {
+        ......
+        return nil, uerr(err)
+    }
+    ...
+    req.closeBody()
+	}
+}
+```
+
+源代码中 ，我们可以看到`http.Get` 首先是通过 一个 调用 `DefaultClient` 中的  `Get` 方法去首先请求，而 `DefaultClient.Get` 则是通过 `NewRequest` 方法构造请求数据，然后将数据通过 `Client` 的对象 `do` 方法发到服务器端。在此我们不细述 `do` 方法的实现，我们看下 `DefaultClient` 和 `NewRequest`的代码。
+
+```go
+var DefaultClient = &Client{}
+
+func NewRequest(method, url string, body io.Reader) (*Request, error) {
+	if method == "" {
+		method = "GET"
+	}
+	if !validMethod(method) {
+		return nil, fmt.Errorf("net/http: invalid method %q", method)
+	}
+	u, err := parseURL(url) 
+	if err != nil {
+		return nil, err
+	}
+	rc, ok := body.(io.ReadCloser)
+	if !ok && body != nil {
+		rc = ioutil.NopCloser(body)
+	}
+	u.Host = removeEmptyPort(u.Host)
+	req := &Request{
+		Method:     method,
+		URL:        u,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     make(Header),
+		Body:       rc,
+		Host:       u.Host,
+	}
+	if body != nil {
+		switch v := body.(type) {
+		case *bytes.Buffer:
+			req.ContentLength = int64(v.Len())
+			buf := v.Bytes()
+			req.GetBody = func() (io.ReadCloser, error) {
+				r := bytes.NewReader(buf)
+				return ioutil.NopCloser(r), nil
+			}
+		case *bytes.Reader:
+			req.ContentLength = int64(v.Len())
+			snapshot := *v
+			req.GetBody = func() (io.ReadCloser, error) {
+				r := snapshot
+				return ioutil.NopCloser(&r), nil
+			}
+		case *strings.Reader:
+			req.ContentLength = int64(v.Len())
+			snapshot := *v
+			req.GetBody = func() (io.ReadCloser, error) {
+				r := snapshot
+				return ioutil.NopCloser(&r), nil
+			}
+		default:
+		}
+		if req.GetBody != nil && req.ContentLength == 0 {
+			req.Body = NoBody
+			req.GetBody = func() (io.ReadCloser, error) { return NoBody, nil }
+		}
+	}
+
+	return req, nil
+}
+```
+
+`DefaultClient` 从代码层面看是一个其实就是一个系统 默认的 `&Client{}` 对象， 而 `NewRequest` 则是将用户传入的方法，URL等参数通过各种判断以及组合，组合成一个 `Request` 对象，返回给用户。这时候我们通过绕过一些默认的构造，去实现一个http Get请求试试：
+
+```go
+	Client := &http.Client{}
+	request, _ := http.NewRequest("GET", "https://doc.btc.com/v1/poster/production/explorer-banner.json?t=1592798186869", nil)
+	response, err := Client.Do(request)
+	defer response.Body.Close()
+	content, err := ioutil.ReadAll(response.Body)
+	fmt.Println(string(content))
+	fmt.Println(err)
+```
+
+通过上述例子，我们还原了 `http.Get` 的代码逻辑，下面我们尝试下更为复杂点的环境，示例代码如下:
+
+```go
+package main
+
+import (
+	"encoding/base64"
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"net/http"
+	"net/url"
+	"strconv"
+	"time"
+)
+
+func getApiKey(baseKey string) string {
+	keye := []byte(baseKey)
+	first := keye[0:8]
+	second := keye[8:]
+	mykey := string(second) + string(first)
+	t := time.Now().UnixNano() / 1e6
+	e := 1*t + 1111111111111
+	rand.Seed(time.Now().UnixNano())
+	n := rand.Intn(10)
+	r := rand.Intn(10)
+	o := rand.Intn(10)
+	time := strconv.FormatInt(e, 10) + strconv.Itoa(n) + strconv.Itoa(r) + strconv.Itoa(o)
+	apiKey := mykey + "|" + time
+	return base64.URLEncoding.EncodeToString([]byte(apiKey))
+}
+
+func main() {
+	urlApi := "https://www.okcoin.cn/api/explorer/v1/eth/transfers"
+	var params map[string]interface{}
+	var header map[string]interface{}
+
+	params = map[string]interface{}{
+		"t":        1592806377542,
+		"offset":   0,
+		"limit":    20,
+		"tranHash": "0x1342bceaee826525e7e8df161cfefab2aac65c982041e0d422948154c505a1e8",
+	}
+
+	header = map[string]interface{}{
+		"x-apiKey":   getApiKey("a2c903cc-b31e-4547-9299-b6d07b7631ab"),
+		"timeout":    10000,
+		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36",
+	}
+	//增加参数
+	reqParams := url.Values{}
+	if len(params) > 0 {
+		for k, v := range params {
+			reqParams.Set(k, fmt.Sprint(v))
+		}
+	}
+	api, _ := url.Parse(urlApi)
+	api.RawQuery = reqParams.Encode()
+	lastApi := api.String()
+	Client := &http.Client{}
+	//增加 header
+	request, _ := http.NewRequest("GET", lastApi, nil)
+	for t, v := range header {
+		request.Header.Add(t, fmt.Sprint(v))
+	}
+	//增加 cookies
+	cookies := &http.Cookie{Name: "OKCOIN"}
+	request.AddCookie(cookies)
+	response, _ := Client.Do(request)
+	defer response.Body.Close()
+	content, err := ioutil.ReadAll(response.Body)
+	fmt.Println(string(content))
+	fmt.Println(err)
+}
+
+```
+
+以上例子，没有进行一些封装和简化操作，只是为了更加直观的了解整个http客户端发送的过程，对增加参数以及头部, cookies信息等进行了列举。
