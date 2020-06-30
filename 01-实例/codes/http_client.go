@@ -8,12 +8,15 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
-	"net/url"
+	"os"
 	"strconv"
 	"time"
 )
@@ -34,7 +37,65 @@ func getApiKey(baseKey string) string {
 	return base64.URLEncoding.EncodeToString([]byte(apiKey))
 }
 
+func postFile(filename, apiUrl string) (*http.Response, error) {
+	Client := &http.Client{}
+	body_buf := bytes.NewBufferString("")
+	body_writer := multipart.NewWriter(body_buf)
+	_, err := body_writer.CreateFormFile("uploadfile", filename)
+	if err != nil {
+		return nil, err
+	}
+	fh, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	boundary := body_writer.Boundary()
+	close_buf := bytes.NewBufferString(fmt.Sprintf("\r\n--%s--\r\n", boundary))
+	request_reader := io.MultiReader(body_buf, fh, close_buf)
+	fi, err := fh.Stat()
+	if err != nil {
+		fmt.Printf("Error Stating file: %s", filename)
+		return nil, err
+	}
+	req, err := http.NewRequest("POST", apiUrl, request_reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("Content-Type", "multipart/form-data; boundary="+boundary)
+	req.ContentLength = fi.Size() + int64(body_buf.Len()) + int64(close_buf.Len())
+	req.ContentLength = fi.Size() + int64(body_buf.Len()) + int64(close_buf.Len())
+	return Client.Do(req)
+}
+
+func getFile(apiUrl string) {
+	Client := &http.Client{}
+	Client.Timeout = time.Second * 60
+	request, _ := http.NewRequest("GET", apiUrl, nil)
+	resp, err := Client.Do(request)
+	defer resp.Body.Close()
+	if err != nil {
+		return
+	}
+	out, err := os.Create("D:/wamp64/www/fileTest/1.jpg")
+	wt := bufio.NewWriter(out)
+	defer out.Close()
+	n, err := io.Copy(wt, resp.Body)
+	fmt.Println("write", n)
+	if err != nil {
+		panic(err)
+	}
+	wt.Flush()
+}
+
 func main() {
+
+	/*apiUrl := "http://127.0.0.1:8888/upload"
+	response, err := postFile("C:/Users/fuzamei/Desktop/2019101319091926888356.jpg", apiUrl)
+	fmt.Println(err)
+	fmt.Println(response)*/
+
+	apiUrl := "http://127.0.0.1:8888/down?file=2020630160250903659.jpg"
+	getFile(apiUrl)
 
 	/*response, err := http.Get("https://doc.btc.com/v1/poster/production/explorer-banner.json?t=1592798186869")
 	fmt.Println(response)
@@ -48,7 +109,7 @@ func main() {
 	fmt.Println(string(content))
 	fmt.Println(err)*/
 
-	urlApi := "https://www.okcoin.cn/api/explorer/v1/eth/transfers"
+	/*urlApi := "https://www.okcoin.cn/api/explorer/v1/eth/transfers"
 	var params map[string]interface{}
 	var header map[string]interface{}
 
@@ -87,5 +148,6 @@ func main() {
 	defer response.Body.Close()
 	content, err := ioutil.ReadAll(response.Body)
 	fmt.Println(string(content))
-	fmt.Println(err)
+	fmt.Println(err)*/
+
 }

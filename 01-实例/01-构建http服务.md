@@ -671,3 +671,288 @@ func main() {
 ```
 
 以上例子，没有进行一些封装和简化操作，只是为了更加直观的了解整个http客户端发送的过程，对增加参数以及头部, cookies信息等进行了列举。
+
+### 文件上传
+
+服务端文件上传代码：
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"math/rand"
+	"net/http"
+	"os"
+	"path"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+)
+
+
+func Ext(fileName string) string {
+	return path.Ext(fileName)
+}
+
+func checkFileIsExist(filename string) bool {
+	var exist = true
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		exist = false
+	}
+	return exist
+}
+
+func uploadFile(w http.ResponseWriter, r *http.Request) {
+	r.ParseMultipartForm(5)
+	file, handler, err := r.FormFile("uploadfile")
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	extName := Ext(handler.Filename)
+	if _, ok := allowExt[extName]; !ok {
+		w.Write([]byte(extName + " is not allow ext"))
+		return
+	}
+	if int(handler.Size) > allowMaxSize {
+		w.Write([]byte(handler.Filename + " Size bigger +" + string(allowMaxSize)))
+		return
+	}
+	fileexist := checkFileIsExist(filePath)
+	if !fileexist {
+		err1 := os.Mkdir(filePath, os.ModePerm)
+		if err1 != nil {
+			w.Write([]byte(err1.Error()))
+			return
+		}
+	}
+	rand.Seed(time.Now().UnixNano())
+	randInt := strconv.Itoa(rand.Intn(10000000))
+	newFile := time.Now().Format("200612150405") + string(randInt) + extName
+	f, err := os.OpenFile(filePath+"/"+newFile, os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	defer f.Close()
+	defer file.Close()
+	io.Copy(f, file)
+	w.Write([]byte("file_upload succ!!!!"))
+}
+
+var allowExt map[string]string = map[string]string{
+	".jpg": ".jpg",
+}
+var allowMaxSize int = 1024 * 1024 * 5
+var filePath string = "D:/wamp64/www/fileTest"
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/upload", uploadFile)
+	http.ListenAndServe(":8888", mux)
+
+}
+
+```
+
+客户端文件上传代码：
+
+```go
+package main
+
+import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"math/rand"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
+)
+
+func postFile(filename, apiUrl string) (*http.Response, error) {
+	Client := &http.Client{}
+	body_buf := bytes.NewBufferString("")
+	body_writer := multipart.NewWriter(body_buf)
+	_, err := body_writer.CreateFormFile("uploadfile", filename)
+	if err != nil {
+		return nil, err
+	}
+	fh, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	boundary := body_writer.Boundary()
+	close_buf := bytes.NewBufferString(fmt.Sprintf("\r\n--%s--\r\n", boundary))
+	request_reader := io.MultiReader(body_buf, fh, close_buf)
+	fi, err := fh.Stat()
+	if err != nil {
+		fmt.Printf("Error Stating file: %s", filename)
+		return nil, err
+	}
+	req, err := http.NewRequest("POST", apiUrl, request_reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("Content-Type", "multipart/form-data; boundary="+boundary)
+	req.ContentLength = fi.Size() + int64(body_buf.Len()) + int64(close_buf.Len())
+	req.ContentLength = fi.Size() + int64(body_buf.Len()) + int64(close_buf.Len())
+	return Client.Do(req)
+}
+
+func main() {
+	apiUrl := "http://127.0.0.1:8888/upload"
+	response, err := postFile("C:/Users/fuzamei/Desktop/2019101319091926888356.jpg", apiUrl)
+	fmt.Println(err)
+	fmt.Println(response)
+}
+```
+
+### 文件下载
+
+服务端文件下载代码:
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"math/rand"
+	"net/http"
+	"os"
+	"path"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+)
+
+func downFile(w http.ResponseWriter, r *http.Request) {
+	if r.RequestURI == "/favicon.ico" {
+		return
+	}
+	fileName := r.URL.Query().Get("file")
+	if len(fileName) == 0 {
+		w.Write([]byte("file is empty!!!"))
+		return
+	}
+	fileName, err := url.QueryUnescape(fileName)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	f, err := os.Open(filePath + "/" + fileName)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	info, err := f.Stat()
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	_, contentType := getContentType(fileName)
+	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	f.Seek(0, 0)
+	io.Copy(w, f)
+}
+
+func getContentType(fileName string) (extension, contentType string) {
+	arr := strings.Split(fileName, ".")
+	if len(arr) >= 2 {
+		extension = arr[len(arr)-1]
+		switch extension {
+		case "jpeg", "jpe", "jpg":
+			contentType = "image/jpeg"
+		case "png":
+			contentType = "image/png"
+		case "gif":
+			contentType = "image/gif"
+		case "mp4":
+			contentType = "video/mpeg4"
+		case "mp3":
+			contentType = "audio/mp3"
+		case "wav":
+			contentType = "audio/wav"
+		case "pdf":
+			contentType = "application/pdf"
+		case "doc", "":
+			contentType = "application/msword"
+		}
+	}
+	contentType = "application/octet-stream"
+	return
+}
+
+var allowExt map[string]string = map[string]string{
+	".jpg": ".jpg",
+}
+var allowMaxSize int = 1024 * 1024 * 5
+var filePath string = "D:/wamp64/www/fileTest"
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/down", downFile)
+	http.ListenAndServe(":8888", mux)
+}
+
+```
+
+客户端文件下载代码:
+
+```go
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"math/rand"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
+)
+
+func getFile(apiUrl string) {
+	Client := &http.Client{}
+	Client.Timeout = time.Second * 60
+	request, _ := http.NewRequest("GET", apiUrl, nil)
+	resp, err := Client.Do(request)
+	defer resp.Body.Close()
+	if err != nil {
+		return
+	}
+	out, err := os.Create("D:/wamp64/www/fileTest/1.jpg")
+	wt := bufio.NewWriter(out)
+	defer out.Close()
+	n, err := io.Copy(wt, resp.Body)
+	fmt.Println("write", n)
+	if err != nil {
+		panic(err)
+	}
+	wt.Flush()
+}
+
+func main() {
+	apiUrl := "http://127.0.0.1:8888/down?file=2020630160250903659.jpg"
+	getFile(apiUrl)
+}
+```
+
