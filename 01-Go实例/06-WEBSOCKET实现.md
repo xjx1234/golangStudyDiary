@@ -68,3 +68,322 @@
 
 ### WebSocket服务端实现
 
+​		首先出于兼容性的考虑，WS的握手使用HTTP来实现（此文档中提到未来有可能会使用专用的端口和方法来实现握手），客户端的握手消息就是一个「普通的，带有Upgrade头的，HTTP Request消息」。所以这一个小节到内容大部分都来自于RFC2616，这里只是它的一种应用形式，下面是RFC6455文档中给出的一个客户端握手消息示例：
+
+> HTTP/1.1 101 Switching Protocols 
+>
+> Upgrade: websocket 
+>
+> Connection: Upgrade 
+>
+> Sec-WebSocket-Accept: FavWZqYJf1A1qOejq/JygSoHKDM=
+
+可以看到，前两行跟HTTP的Request的起始行一模一样，而真正在WS的握手过程中起到作用的是下面几个header域。Upgrade：upgrade是HTTP1.1中用于定义转换协议的header域。它表示，如果服务器支持的话，客户端希望使用现有的「网络层」已经建立好的这个「连接（此处是TCP连接）」，切换到另外一个「应用层」（此处是WebSocket）协议。
+
+Connection：HTTP1.1中规定Upgrade只能应用在「直接连接」中，所以带有Upgrade头的HTTP1.1消息必须含有Connection头，因为Connection头的意义就是，任何接收到此消息的人（往往是代理服务器）都要在转发此消息之前处理掉Connection中指定的域（不转发Upgrade域）。
+
+介绍完基本的原理，下面我们讲解代码的部分，此文中实现WebSocket服务我们采用了 `github.com/gorilla/websocket` 库包，代码用了网上的一些例子，首先实现WebSocket我们先升级Http来实现，首先要定义升级部分的参数：
+
+```go
+//升级websocket参数配置
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:   1024,
+	WriteBufferSize:  1024,
+	HandshakeTimeout: 10 * time.Second,
+	// 控制跨域，可以根据需要写入自己需要的代码
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+```
+
+定义完升级部分参数，我们可以想想，WebSocket连接肯定需要几个必要部分，第一个是 消息， 第二个是连接，我们接着定义这2部分：
+
+```go
+var (
+	maxConnId int64 //最大ID
+)
+
+//连接结构体
+type WsConn struct {
+	Id         int64  //ID
+	WsSocket   *websocket.Conn //连接
+	mutex      sync.Mutex //锁
+	InChan     chan *WsMessage //收到消息通道
+	OutChan    chan *WsMessage //发出信息通道
+	ClosedChan chan byte // 关闭连接通道
+	isClosed   bool //是否关闭
+}
+
+//消息结构体
+type WsMessage struct {
+	Type int
+	Data []byte
+}
+```
+
+定义完以上部分，就进入到逻辑部分，websocket服务需要处理的部分有 获取信息， 发出信息， 关闭连接，处理初始化连接几块，先从初始化连接部分开始，也就是用户连接上来后的处理部分：
+
+```go
+//处理请求
+func wsHandler(w http.ResponseWriter, r *http.Request) {
+	wsSocket, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("websocket升级失败" + err.Error())
+		return
+	}
+	maxConnId++
+	conn := &WsConn{
+		Id:       maxConnId,
+		WsSocket: wsSocket,
+		InChan:   make(chan *WsMessage, 1000),
+		OutChan:  make(chan *WsMessage, 1000),
+		ClosedChan: make(chan byte),
+		isClosed: false,
+	}
+	fmt.Println(conn)
+	log.Println("total online number:", maxConnId-1)
+	go conn.procLoop() //处理心跳 处理通道中的数据读与写
+	go conn.wsReadLoop() // websocket收到的数据处理 
+	go conn.wsWriteLoop() // 负责websocket发出的数据处理 
+}
+```
+
+procLoop代码：
+
+```go
+func (wsConn *WsConn) procLoop() {
+
+	//心跳机制，为了处理无效连接，这机制大部分场景不需要实现，只是为了演示去实现
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			if err := wsConn.wsWrite(websocket.TextMessage, []byte("heartbeat")); err != nil {
+				wsConn.wsClose() //关闭连接
+				break
+			}
+		}
+	}()
+
+	for {
+		msg, err := wsConn.wsRead()
+		if err != nil {
+			log.Println("获取消息出现错误", err.Error())
+			break
+		}
+		log.Println("接收到消息", string(msg.Data))
+
+		// 以下内容为获取内容后得返回信息，可以根据实际情况修改
+		err = wsConn.wsWrite(msg.Type, msg.Data)
+		if err != nil {
+			log.Println("发送消息给客户端出现错误", err.Error())
+			break
+		}
+	}
+}
+```
+
+wsReadLoop代码：
+
+```go
+func (wsConn *WsConn) wsReadLoop() {
+	for {
+		msgType, data, err := wsConn.WsSocket.ReadMessage()
+		if err != nil {
+			goto error
+		}
+		req := &WsMessage{
+			msgType,
+			data,
+		}
+		select {
+		case wsConn.InChan <- req:
+		case <-wsConn.ClosedChan:
+			goto closed
+		}
+	}
+error:
+	wsConn.wsClose()
+closed:
+}
+```
+
+wsWriteLoop代码：
+
+```go
+func (wsConn *WsConn) wsWriteLoop() {
+	for {
+		select {
+		case msg := <-wsConn.OutChan:
+			if err := wsConn.WsSocket.WriteMessage(msg.Type, msg.Data); err != nil {
+				goto error
+			}
+		case <-wsConn.ClosedChan:
+			goto closed
+		}
+	}
+error:
+	wsConn.wsClose()
+closed:
+}
+```
+
+wsWrite wsRead  wsClose代码：
+
+```go
+//关闭连接
+func (wsConn *WsConn) wsClose() {
+	wsConn.WsSocket.Close()
+	wsConn.mutex.Lock()
+	defer wsConn.mutex.Unlock()
+	if !wsConn.isClosed {
+		wsConn.isClosed = true
+		close(wsConn.ClosedChan)
+	}
+}
+
+//读数据
+func (wsConn *WsConn) wsRead() (*WsMessage, error) {
+	select {
+	case msg := <-wsConn.InChan:
+		return msg, nil
+	case <-wsConn.ClosedChan:
+	}
+	return nil, errors.New("websocket closed")
+}
+
+//写数据
+func (wsConn *WsConn) wsWrite(messageType int, data []byte) error {
+	select {
+	case wsConn.OutChan <- &WsMessage{messageType, data}:
+	case <-wsConn.ClosedChan:
+		return errors.New("webscoket closed")
+	}
+	return nil
+}
+```
+
+最后所以逻辑代码完成，我们按着Http Server方式来启动服务:
+
+```go
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", wsHandler)
+	http.ListenAndServe("127.0.0.1:8888", mux)
+}
+```
+
+
+
+### WebSocket客户端实现
+
+客户端代码分为2种方式，一种是通过JS现实，一种是通过go语言实现，代码我就直接贴下面了，不做过多解析了。
+
+Go客户端：
+
+```go
+package main
+
+import (
+	"fmt"
+	"golang.org/x/net/websocket"
+	"log"
+)
+
+func main() {
+	origin := "http://127.0.0.1:8888/"
+	url := "ws://127.0.0.1:8888/ws"
+	ws, err := websocket.Dial(url, "", origin)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(ws)
+	_, err = ws.Write([]byte("zzzzzzzzzz"))
+	fmt.Println(err)
+
+	for {
+		var msg = make([]byte, 1000)
+		m, err := ws.Read(msg)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("Receive: %s\n", msg[:m])
+	}
+}
+```
+
+HTML+JS 客户端：
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <script>
+        window.addEventListener("load", function(evt) {
+            var output = document.getElementById("output");
+            var input = document.getElementById("input");
+            var ws;
+            var print = function(message) {
+                var d = document.createElement("div");
+                d.innerHTML = message;
+                output.appendChild(d);
+            };
+            document.getElementById("open").onclick = function(evt) {
+                if (ws) {
+                    return false;
+                }
+                ws = new WebSocket("ws://127.0.0.1:8888/ws");
+                ws.onopen = function(evt) {
+                    print("OPEN");
+                }
+                ws.onclose = function(evt) {
+                    print("CLOSE");
+                    ws = null;
+                }
+                ws.onmessage = function(evt) {
+                    print("RESPONSE: " + evt.data);
+                }
+                ws.onerror = function(evt) {
+                    print("ERROR: " + evt.data);
+                }
+                return false;
+            };
+            document.getElementById("send").onclick = function(evt) {
+                if (!ws) {
+                    return false;
+                }
+                print("SEND: " + input.value);
+                ws.send(input.value);
+                return false;
+            };
+            document.getElementById("close").onclick = function(evt) {
+                if (!ws) {
+                    return false;
+                }
+                ws.close();
+                return false;
+            };
+        });
+    </script>
+</head>
+<body>
+<table>
+    <tr><td valign="top" width="50%">
+        <p>Click "Open" to create a connection to the server,
+            "Send" to send a message to the server and "Close" to close the connection.
+            You can change the message and send multiple times.
+        </p>
+            <form>
+                <button id="open">Open</button>
+                <button id="close">Close</button>
+            <input id="input" type="text" value="Hello world!">
+            <button id="send">Send</button>
+            </form>
+    </td><td valign="top" width="50%">
+        <div id="output"></div>
+    </td></tr></table>
+</body>
+</html>
+```
+

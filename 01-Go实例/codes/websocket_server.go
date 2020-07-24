@@ -9,6 +9,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 
 var (
 	maxConnId int64
-	allWsConn map[int64]*WsConn
 )
 
 //连接结构体
@@ -61,6 +61,22 @@ func (wsConn *WsConn) procLoop() {
 			}
 		}
 	}()
+
+	for {
+		msg, err := wsConn.wsRead()
+		if err != nil {
+			log.Println("获取消息出现错误", err.Error())
+			break
+		}
+		log.Println("接收到消息", string(msg.Data))
+
+		// 以下内容为获取内容后得返回信息，可以根据实际情况修改
+		err = wsConn.wsWrite(msg.Type, msg.Data)
+		if err != nil {
+			log.Println("发送消息给客户端出现错误", err.Error())
+			break
+		}
+	}
 }
 
 func (wsConn *WsConn) wsReadLoop() {
@@ -143,10 +159,11 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		WsSocket: wsSocket,
 		InChan:   make(chan *WsMessage, 1000),
 		OutChan:  make(chan *WsMessage, 1000),
+		ClosedChan: make(chan byte),
 		isClosed: false,
 	}
-	allWsConn[maxConnId] = conn
-	log.Println("total online number:", len(allWsConn))
+	fmt.Println(conn)
+	log.Println("total online number:", maxConnId)
 	go conn.procLoop()
 	go conn.wsReadLoop()
 	go conn.wsWriteLoop()
@@ -157,6 +174,6 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", wsHandler)
-	http.ListenAndServe("0.0.0.0:8888", mux)
+	http.ListenAndServe("127.0.0.1:8888", mux)
 
 }
