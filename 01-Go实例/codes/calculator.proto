@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package calculator;
+
+service Calculate{
+    rpc Add (CalParams) returns (ResultRes) {}
+    rpc Sub (CalParams) returns (ResultRes) {}
+    rpc Multiplication (CalParams) returns (ResultRes) {}
+    rpc Division (CalParams) returns (ResultRes) {}
+}
+
+//参数结构
+message CalParams{
+    float p1 = 1;
+    float p2 = 2;
+}
+
+//参数结构
+message ResultRes{
+    float res = 1;
+}
+
+
+
+

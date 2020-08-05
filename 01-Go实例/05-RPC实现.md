@@ -209,9 +209,185 @@ func main(){
 
 ### gRPC
 
-jsonrpc虽然可以支持跨语言但是不支持HTTP传输，而且性能不是太突出，所以在实际生产环境中都不会用标准库里面的方式，而是选择Thrift、gRPC等方案。
+Jsonrpc虽然可以支持跨语言但是不支持HTTP传输，而且性能不是太突出，所以在实际生产环境中都不会用标准库里面的方式，而是选择Thrift、gRPC等方案。
 
 gRPC是Google开源的高性能、通用的开源RPC框架，其主要面向移动应用开发并基于HTTP/2协议标准而设计，基于ProtoBuf序列化协议开发，支持Python、Golang、Java等众多开发语言。
 
 Protobuf是Protocol Buffers的简称，它是Google公司开发的一种数据描述语言，类似于XML、JSON等数据描述语言，它非常轻便高效，很适合做数据存储或 RPC 数据交换格式。由于它一次定义，可生成多种语言的代码，非常适合用于通讯协议、数据存储等领域的语言无关、平台无关、可扩展的序列化结构数据格式。
+
+![GRPC](https://myvoice1.oss-cn-beijing.aliyuncs.com/github/grpc.png)
+
+#### Protobuf安装
+
+此处安装默认选择go mod 方式， go mod设置方式在此简单做个描述：
+
+- Windows下 我的电脑右键 -  属性 -   高级系统设置 - 环境变量 ，在系统变量或者 你的用户变量中添加以下内容
+
+> 变量名：GOPROXY   值: https://mirrors.aliyun.com/goproxy/
+
+> 变量名： GO111MODULE  值： on
+
+- Linux下 如下命令操作：
+
+  ```bash
+  go env -w GOPROXY=http://mirrors.aliyun.com/goproxy/
+  go env -w GO111MODULE=on
+  ```
+
+Protobuf Windows下安装方案：
+
+```shell
+1. 找到下载界面 https://github.com//protocolbuffers/protobuf/releases  找到自己相应版本的 windows版本 protoc, 此处我们下载 protoc-4.0.0-rc2-win64.zip, 解压文件，拷贝 protoc\bin\protoc.exe 到 $GOBIN目录的bin下面
+2. 执行 go get -u -v github.com/golang/protobuf 下载文件到go mod相应的目录中去,进入你的 $GOPATH目录下的 pkg\mod\github.com\golang目录下,找到你版本的protobuf仓库，我们此处是 protobuf@v1.4.2, 找到 protoc-gen-go 目录执行 go install . 正常情况下，在您的 $GOBIN/bin目录下面会生成一个 protoc-gen-go.exe 文件
+```
+
+Protobuf Centos/linux下安装方案：
+
+```shell
+protoc 安装流程：
+1. 先安装依赖库以及编译需要的库
+sudo yum install autoconf  automake  libtool curl make  g++  unzip libffi-dev gcc-c++ -y
+2. git clone https://github.com/protocolbuffers/protobuf.git 下载文件包或者直接下载zip包到服务器上，此处应为git clone速度较慢，选择直接下载压缩包模式
+3. unzip protobuf.zip 解压文件
+4. 切换目录到解压的目录下，本示例为：cd protobuf-master
+5. 执行 ./autogen.sh ，命令运行完后执行./configure
+6. 编译 make && make install
+7. 刷新共享库 sudo ldconfig 
+8. 成功后需要使用命令测试  protoc -h
+
+protoc-gen-go 安装流程：
+1. 执行 go get -u -v github.com/golang/protobuf 下载文件到go mod相应的目录中
+2. 进入你的 $GOPATH目录下的 pkg\mod\github.com\golang目录下,找到你版本的protobuf仓库，我们此处是 protobuf@v1.4.2, 找到 protoc-gen-go 目录执行go build
+3. sudo cp protoc-gen-go /bin/ 将生成的 protoc-gen-go 拷贝到bin目录
+```
+
+#### Protobuf语法
+
+语法基本部分网上资料很多，就不一一说明了，篇幅太长，此处给出文章，大家自己去看 
+
+[Protobuf语法]: https://blog.csdn.net/baidu_32237719/article/details/99854208
+
+
+
+#### gRPC示例
+
+为了演示GRPC的示例，我们就拿一个计算器的 加 减 乘 除 的方法来做一个交互实验，首先我们要按照 protobuf 的格式和语法写好生成代码端的proto文件(calculator.proto)
+
+```protobuf
+syntax = "proto3";
+
+package calculator;
+
+service Calculate{
+    rpc Add (CalParams) returns (ResultRes) {}  //加法
+    rpc Sub (CalParams) returns (ResultRes) {}  //减法
+    rpc Multiplication (CalParams) returns (ResultRes) {}  //乘法
+    rpc Division (CalParams) returns (ResultRes) {} // 除法
+}
+
+//请求参数结构
+message CalParams{
+    float p1 = 1;
+    float p2 = 2;
+}
+
+//结果返回参数结构
+message ResultRes{
+    float res = 1;
+}
+```
+
+我们将上述文件编译成go文件： `protoc --go_out=plugins=grpc:. calculator.proto` 执行此命令后生成 一个 `calculator.pb.go` 文件，该文件内容在 `01-Go实例\codes\calculator` 目录下，此处不贴出了，篇幅限制。
+
+服务端示例，参见 (01-Go实例\codes\GRpcServer.go)：
+
+```go
+package main
+
+import (
+	"calculator"
+	"context"
+	"google.golang.org/grpc"
+	"log"
+	"net"
+)
+
+type Cal struct{}
+
+const (
+	Port = ":8808"
+)
+
+func (c *Cal) Add(ctx context.Context, p *calculator.CalParams) (*calculator.ResultRes, error) {
+	last := p.P1 + p.P2
+	return &calculator.ResultRes{Res: last}, nil
+}
+
+func (c *Cal) Sub(ctx context.Context, p *calculator.CalParams) (*calculator.ResultRes, error) {
+	last := p.P1 - p.P2
+	return &calculator.ResultRes{Res: last}, nil
+}
+
+func (c *Cal) Multiplication(ctx context.Context, p *calculator.CalParams) (*calculator.ResultRes, error) {
+	last := p.P1 * p.P2
+	return &calculator.ResultRes{Res: last}, nil
+}
+
+func (c *Cal) Division(ctx context.Context, p *calculator.CalParams) (*calculator.ResultRes, error) {
+	last := p.P1 / p.P2
+	return &calculator.ResultRes{Res: last}, nil
+}
+
+func main() {
+	lis, err := net.Listen("tcp", Port)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := grpc.NewServer()
+	calculator.RegisterCalculateServer(s, &Cal{})
+	if err := s.Serve(lis); err != nil {
+		log.Fatal(err)
+		return
+	}
+}
+```
+
+
+
+客户端示例参见 (01-Go实例\codes\GRpcClient.go)：
+
+```go
+package main
+
+import (
+	"calculator"
+	"context"
+	"fmt"
+	"google.golang.org/grpc"
+	"log"
+)
+
+const (
+	Addres = "localhost:8808"
+)
+
+func main() {
+	conn, err := grpc.Dial(Addres, grpc.WithInsecure())
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	c := calculator.NewCalculateClient(conn)
+	r, err := c.Add(context.Background(), &calculator.CalParams{P1: 1.1, P2: 2.2})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(r)
+	r1, err1 := c.Multiplication(context.Background(), &calculator.CalParams{P1: 1, P2: 2})
+	if err1 != nil {
+		log.Fatal(err1)
+	}
+	fmt.Println(r1)
+}
+```
 
