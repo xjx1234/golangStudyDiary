@@ -354,7 +354,7 @@ func main() {
 
 
 
-客户端示例参见 (01-Go实例\codes\GRpcClient.go)：
+客户端示例参见 (01-Go实例\codes\GRpcServer.go)：
 
 ```go
 package main

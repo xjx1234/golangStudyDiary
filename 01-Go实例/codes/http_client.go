@@ -11,13 +11,17 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/rand"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -87,15 +91,57 @@ func getFile(apiUrl string) {
 	wt.Flush()
 }
 
-func main() {
+//支持 get post格式,支持json格式
+func httpDoRequest(apiUrl string, method string, params map[string]interface{}, header map[string]interface{}) (string, error) {
+	jsonFlag := false
+	httpReq := &http.Request{}
+	reader := &bytes.Reader{}
+	cType, ok := header["Content-Type"]
+	if ok && strings.Contains(fmt.Sprintf("%v", cType), "application/json") {
+		jsonFlag = true
+	}
+	api, _ := url.Parse(apiUrl)
+	if len(params) > 0 {
+		if jsonFlag {
+			bytesData, err := json.Marshal(params)
+			if err != nil {
+				return "", err
+			}
+			reader = bytes.NewReader(bytesData)
+		} else {
+			reqParams := url.Values{}
+			for k, v := range params {
+				reqParams.Set(k, fmt.Sprint(v))
+			}
+			api.RawQuery = reqParams.Encode()
+		}
+	}
+	lastApi := api.String()
+	Client := &http.Client{}
+	if jsonFlag {
+		httpReq, _ = http.NewRequest(method, lastApi, reader)
+	} else {
+		httpReq, _ = http.NewRequest(method, lastApi, nil)
+	}
+	if len(header) > 0 {
+		for t, v := range header {
+			httpReq.Header.Add(t, fmt.Sprint(v))
+		}
+	}
+	response, _ := Client.Do(httpReq)
+	defer response.Body.Close()
+	content, err := ioutil.ReadAll(response.Body)
+	return string(content), err
+}
 
+func main() {
 	/*apiUrl := "http://127.0.0.1:8888/upload"
 	response, err := postFile("C:/Users/fuzamei/Desktop/2019101319091926888356.jpg", apiUrl)
 	fmt.Println(err)
 	fmt.Println(response)*/
 
-	apiUrl := "http://127.0.0.1:8888/down?file=2020630160250903659.jpg"
-	getFile(apiUrl)
+	/*apiUrl := "http://127.0.0.1:8888/down?file=2020630160250903659.jpg"
+	getFile(apiUrl)*/
 
 	/*response, err := http.Get("https://doc.btc.com/v1/poster/production/explorer-banner.json?t=1592798186869")
 	fmt.Println(response)
@@ -125,19 +171,24 @@ func main() {
 		"timeout":    10000,
 		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36",
 	}
-	//增加参数
+	//增加参数 非json格式
 	reqParams := url.Values{}
 	if len(params) > 0 {
 		for k, v := range params {
 			reqParams.Set(k, fmt.Sprint(v))
 		}
 	}
+	//如果是json格式
+	bytesData, err := json.Marshal(params)
+	reader := bytes.NewReader(bytesData)
+
 	api, _ := url.Parse(urlApi)
-	api.RawQuery = reqParams.Encode()
+	api.RawQuery = reqParams.Encode() //json格式可以不需要
 	lastApi := api.String()
 	Client := &http.Client{}
 	//增加 header
-	request, _ := http.NewRequest("GET", lastApi, nil)
+	request, _ := http.NewRequest("GET", lastApi, nil)  //非json
+	request, _ := http.NewRequest("GET", lastApi, reader) //json
 	for t, v := range header {
 		request.Header.Add(t, fmt.Sprint(v))
 	}
