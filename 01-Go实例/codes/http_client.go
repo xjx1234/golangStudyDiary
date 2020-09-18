@@ -113,15 +113,22 @@ func httpDoRequest(apiUrl string, method string, params map[string]interface{}, 
 			for k, v := range params {
 				reqParams.Set(k, fmt.Sprint(v))
 			}
-			api.RawQuery = reqParams.Encode()
 		}
+	}
+	if method != "POST"{
+		api.RawQuery = reqParams.Encode()
 	}
 	lastApi := api.String()
 	Client := &http.Client{}
 	if jsonFlag {
 		httpReq, _ = http.NewRequest(method, lastApi, reader)
 	} else {
-		httpReq, _ = http.NewRequest(method, lastApi, nil)
+		if method == "POST"{
+			body := ioutil.NopCloser(strings.NewReader(reqParams.Encode()))
+			httpReq, _ = http.NewRequest(method, apiUrl, body)
+		}else{
+			httpReq, _ = http.NewRequest(method, lastApi, nil)
+		}
 	}
 	if len(header) > 0 {
 		for t, v := range header {
